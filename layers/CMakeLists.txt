@@ -46,7 +46,17 @@ target_sources(VkLayer_khronos_memory_decompression PRIVATE
     decompression/decompression.h
 )
 
-set(EXTENSION_LAYERS VkLayer_khronos_synchronization2 VkLayer_khronos_shader_object VkLayer_khronos_memory_decompression)
+if(IOS)
+    add_library(VkLayer_khronos_dynamic_rendering SHARED)
+else()
+    add_library(VkLayer_khronos_dynamic_rendering MODULE)
+endif()
+
+target_sources(VkLayer_khronos_dynamic_rendering PRIVATE
+    dynamic_rendering.cpp
+)
+
+set(EXTENSION_LAYERS VkLayer_khronos_synchronization2 VkLayer_khronos_shader_object VkLayer_khronos_memory_decompression VkLayer_khronos_dynamic_rendering)
 
 if (NOT WIN32)
     # timeline_semaphore.c requires a C compiler

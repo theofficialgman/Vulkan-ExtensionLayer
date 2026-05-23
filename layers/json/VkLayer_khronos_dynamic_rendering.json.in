@@ -1,0 +1,40 @@
+{
+    "file_format_version": "1.2.0",
+    "layer": {
+        "name": "VK_LAYER_KHRONOS_dynamic_rendering",
+        "type": "GLOBAL",
+        "library_path": "@JSON_LIBRARY_PATH@",
+        "api_version": "@JSON_VERSION@",
+        "implementation_version": "1",
+        "description": "Khronos dynamic rendering emulation layer",
+        "introduction": "The VK_LAYER_KHRONOS_dynamic_rendering layer emulates the VK_KHR_dynamic_rendering extension by translating dynamic rendering commands to traditional render pass objects.",
+        "url": "https://vulkan.lunarg.com/doc/sdk/latest/windows/dynamic_rendering_layer.html",
+        "status": "STABLE",
+        "platforms": [ "WINDOWS", "LINUX", "MACOS", "ANDROID" ],
+        "instance_extensions": [],
+        "device_extensions": [
+            {
+                "name": "VK_KHR_dynamic_rendering",
+                "spec_version": "1",
+                "entrypoints": [
+                    "vkCmdBeginRenderingKHR",
+                    "vkCmdEndRenderingKHR",
+                    "vkCmdBeginRendering",
+                    "vkCmdEndRendering"
+                ]
+            }
+        ],
+        "features": {
+            "settings": [
+                {
+                    "key": "force_enable",
+                    "env": "VK_DYNAMIC_RENDERING_FORCE_ENABLE",
+                    "label": "Force Enable",
+                    "description": "Force the layer to be active even if the underlying driver also implements the dynamic rendering extension.",
+                    "type": "BOOL",
+                    "default": false
+                }
+            ]
+        }
+    }
+}
