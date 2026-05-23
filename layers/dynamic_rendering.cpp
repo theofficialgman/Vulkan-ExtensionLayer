@@ -27,6 +27,7 @@
 
 #include <vulkan/vulkan_core.h>
 #include <vulkan/vk_layer.h>
+#include <vulkan/layer/vk_layer_settings.hpp>
 
 #include <cstring>
 #include <mutex>
@@ -205,11 +206,19 @@ struct DeviceData {
     std::unordered_map<FramebufferKey, VkFramebuffer, ByteHash<FramebufferKey>> fb_cache;
 };
 
+static const char* kLayerName = "VK_LAYER_KHRONOS_dynamic_rendering";
+static const char* kLayerSettingsForceEnable = "force_enable";
+
+struct LayerSettings {
+    bool force_enable = false;
+};
+
 struct InstanceData {
     VkInstance                              instance;
     PFN_vkGetInstanceProcAddr               next_gipa;
     PFN_vkGetPhysicalDeviceFeatures2        GetPhysicalDeviceFeatures2;
     PFN_vkEnumerateDeviceExtensionProperties EnumerateDeviceExtensionProperties;
+    LayerSettings                           layer_settings;
 };
 
 // ============================================================================
@@ -860,6 +869,23 @@ static VKAPI_ATTR void VKAPI_CALL layer_GetPhysicalDeviceFeatures2(
 }
 
 // ============================================================================
+// Layer settings
+// ============================================================================
+
+static void InitLayerSettings(const VkInstanceCreateInfo* pCreateInfo,
+                               const VkAllocationCallbacks* pAllocator,
+                               LayerSettings* layer_settings) {
+    const VkLayerSettingsCreateInfoEXT* create_info = vkuFindLayerSettingsCreateInfo(pCreateInfo);
+    VkuLayerSettingSet layer_setting_set = VK_NULL_HANDLE;
+    vkuCreateLayerSettingSet(kLayerName, create_info, pAllocator, nullptr, &layer_setting_set);
+
+    if (vkuHasLayerSetting(layer_setting_set, kLayerSettingsForceEnable))
+        vkuGetLayerSettingValue(layer_setting_set, kLayerSettingsForceEnable, layer_settings->force_enable);
+
+    vkuDestroyLayerSettingSet(layer_setting_set, pAllocator);
+}
+
+// ============================================================================
 // Instance lifecycle
 // ============================================================================
 
@@ -893,6 +919,8 @@ static VKAPI_ATTR VkResult VKAPI_CALL layer_CreateInstance(
     LOAD_INST(EnumerateDeviceExtensionProperties);
 
 #undef LOAD_INST
+
+    InitLayerSettings(pCreateInfo, pAllocator, &data->layer_settings);
 
     std::lock_guard<std::mutex> lk(g_inst_map_mtx);
     g_inst_map[dispatch_key(*pInstance)] = data;
@@ -932,6 +960,42 @@ static VKAPI_ATTR VkResult VKAPI_CALL layer_CreateDevice(
     PFN_vkGetInstanceProcAddr next_gipa = chain->u.pLayerInfo->pfnNextGetInstanceProcAddr;
     PFN_vkGetDeviceProcAddr   next_gdpa = chain->u.pLayerInfo->pfnNextGetDeviceProcAddr;
     chain->u.pLayerInfo = chain->u.pLayerInfo->pNext;
+
+    // Check if the driver natively supports dynamic rendering.
+    InstanceData* inst_data = get_inst(dispatch_key(physicalDevice));
+    bool driver_has_native = false;
+    if (inst_data && inst_data->EnumerateDeviceExtensionProperties) {
+        uint32_t count = 0;
+        inst_data->EnumerateDeviceExtensionProperties(physicalDevice, nullptr, &count, nullptr);
+        if (count > 0) {
+            VkExtensionProperties* exts = new VkExtensionProperties[count];
+            inst_data->EnumerateDeviceExtensionProperties(physicalDevice, nullptr, &count, exts);
+            for (uint32_t i = 0; i < count; ++i) {
+                if (!strcmp(exts[i].extensionName, VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)) {
+                    driver_has_native = true;
+                    break;
+                }
+            }
+            delete[] exts;
+        }
+    }
+
+    // If the driver natively supports dynamic rendering and force_enable is not
+    // set, pass through without emulation.
+    bool emulate = !driver_has_native || (inst_data && inst_data->layer_settings.force_enable);
+    if (!emulate) {
+        auto* next_create = reinterpret_cast<PFN_vkCreateDevice>(
+            next_gipa(VK_NULL_HANDLE, "vkCreateDevice"));
+        VkResult r = next_create(physicalDevice, pCreateInfo, pAllocator, pDevice);
+        if (r != VK_SUCCESS) return r;
+        // Still register a DeviceData entry so device-level hooks work as pass-throughs.
+        DeviceData* data = new DeviceData();
+        data->device    = *pDevice;
+        data->next_gdpa = next_gdpa;
+        std::lock_guard<std::mutex> lk(g_dev_map_mtx);
+        g_dev_map[dispatch_key(*pDevice)] = data;
+        return VK_SUCCESS;
+    }
 
     // Strip VK_KHR_dynamic_rendering from the extension list so the ICD does
     // not see an extension it does not support.
