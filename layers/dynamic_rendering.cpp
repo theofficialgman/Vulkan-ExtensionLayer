@@ -1045,6 +1045,71 @@ static VKAPI_ATTR void VKAPI_CALL layer_DestroyDevice(
 }
 
 // ============================================================================
+// EnumerateDeviceExtensionProperties — must be reachable via GetInstanceProcAddr
+// ============================================================================
+
+static VKAPI_ATTR VkResult VKAPI_CALL
+layer_EnumerateDeviceExtensionProperties(
+    VkPhysicalDevice physicalDevice, const char* pLayerName,
+    uint32_t* pPropertyCount, VkExtensionProperties* pProperties)
+{
+    static const VkExtensionProperties provided = {
+        VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME, VK_KHR_DYNAMIC_RENDERING_SPEC_VERSION
+    };
+
+    if (pLayerName && !strcmp(pLayerName, "VK_LAYER_KHRONOS_dynamic_rendering")) {
+        if (!pProperties) { *pPropertyCount = 1; return VK_SUCCESS; }
+        if (*pPropertyCount < 1) { *pPropertyCount = 0; return VK_INCOMPLETE; }
+        *pProperties    = provided;
+        *pPropertyCount = 1;
+        return VK_SUCCESS;
+    }
+
+    if (!physicalDevice) return VK_ERROR_LAYER_NOT_PRESENT;
+
+    InstanceData* inst = get_inst(dispatch_key(physicalDevice));
+    if (!inst || !inst->EnumerateDeviceExtensionProperties)
+        return VK_ERROR_INITIALIZATION_FAILED;
+
+    uint32_t driver_count = 0;
+    VkResult r = inst->EnumerateDeviceExtensionProperties(
+        physicalDevice, nullptr, &driver_count, nullptr);
+    if (r != VK_SUCCESS) return r;
+
+    VkExtensionProperties* driver_exts = new VkExtensionProperties[driver_count ? driver_count : 1];
+    r = inst->EnumerateDeviceExtensionProperties(
+        physicalDevice, nullptr, &driver_count, driver_exts);
+    if (r != VK_SUCCESS) { delete[] driver_exts; return r; }
+
+    bool already_present = false;
+    for (uint32_t i = 0; i < driver_count; ++i) {
+        if (!strcmp(driver_exts[i].extensionName, VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)) {
+            already_present = true;
+            break;
+        }
+    }
+
+    uint32_t total = driver_count + (already_present ? 0 : 1);
+
+    if (!pProperties) {
+        *pPropertyCount = total;
+        delete[] driver_exts;
+        return VK_SUCCESS;
+    }
+
+    uint32_t out  = (*pPropertyCount < total) ? *pPropertyCount : total;
+    uint32_t copy = (out < driver_count) ? out : driver_count;
+    memcpy(pProperties, driver_exts, copy * sizeof(VkExtensionProperties));
+    if (!already_present && copy < out) {
+        pProperties[copy] = provided;
+        copy++;
+    }
+    *pPropertyCount = copy;
+    delete[] driver_exts;
+    return copy < total ? VK_INCOMPLETE : VK_SUCCESS;
+}
+
+// ============================================================================
 // Entrypoint dispatch tables
 // ============================================================================
 
@@ -1054,6 +1119,7 @@ static PFN_vkVoidFunction intercept_instance(const char* name) {
     M(DestroyInstance);
     M(CreateDevice);
     M(GetPhysicalDeviceFeatures2);
+    M(EnumerateDeviceExtensionProperties);
 #undef M
     // Core 1.3 alias for GetPhysicalDeviceFeatures2
     if (!strcmp(name, "vkGetPhysicalDeviceFeatures2KHR"))
@@ -1145,63 +1211,8 @@ vkEnumerateDeviceExtensionProperties(
     VkPhysicalDevice physicalDevice, const char* pLayerName,
     uint32_t* pPropertyCount, VkExtensionProperties* pProperties)
 {
-    static const VkExtensionProperties provided = {
-        VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME, VK_KHR_DYNAMIC_RENDERING_SPEC_VERSION
-    };
-
-    if (pLayerName && !strcmp(pLayerName, "VK_LAYER_KHRONOS_dynamic_rendering")) {
-        // Direct layer query — just return our one extension.
-        if (!pProperties) { *pPropertyCount = 1; return VK_SUCCESS; }
-        if (*pPropertyCount < 1) { *pPropertyCount = 0; return VK_INCOMPLETE; }
-        *pProperties    = provided;
-        *pPropertyCount = 1;
-        return VK_SUCCESS;
-    }
-
-    if (!physicalDevice) return VK_ERROR_LAYER_NOT_PRESENT;
-
-    InstanceData* inst = get_inst(dispatch_key(physicalDevice));
-    if (!inst || !inst->EnumerateDeviceExtensionProperties)
-        return VK_ERROR_INITIALIZATION_FAILED;
-
-    // Query the driver's extensions first.
-    uint32_t driver_count = 0;
-    VkResult r = inst->EnumerateDeviceExtensionProperties(
-        physicalDevice, nullptr, &driver_count, nullptr);
-    if (r != VK_SUCCESS) return r;
-
-    VkExtensionProperties* driver_exts = new VkExtensionProperties[driver_count ? driver_count : 1];
-    r = inst->EnumerateDeviceExtensionProperties(
-        physicalDevice, nullptr, &driver_count, driver_exts);
-    if (r != VK_SUCCESS) { delete[] driver_exts; return r; }
-
-    // Check whether the driver already exposes dynamic rendering natively.
-    bool already_present = false;
-    for (uint32_t i = 0; i < driver_count; ++i) {
-        if (!strcmp(driver_exts[i].extensionName, VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME)) {
-            already_present = true;
-            break;
-        }
-    }
-
-    uint32_t total = driver_count + (already_present ? 0 : 1);
-
-    if (!pProperties) {
-        *pPropertyCount = total;
-        delete[] driver_exts;
-        return VK_SUCCESS;
-    }
-
-    uint32_t out = (*pPropertyCount < total) ? *pPropertyCount : total;
-    uint32_t copy = (out < driver_count) ? out : driver_count;
-    memcpy(pProperties, driver_exts, copy * sizeof(VkExtensionProperties));
-    if (!already_present && copy < out) {
-        pProperties[copy] = provided;
-        copy++;
-    }
-    *pPropertyCount = copy;
-    delete[] driver_exts;
-    return copy < total ? VK_INCOMPLETE : VK_SUCCESS;
+    return layer_EnumerateDeviceExtensionProperties(
+        physicalDevice, pLayerName, pPropertyCount, pProperties);
 }
 
 VEL_EXPORT VKAPI_ATTR VkResult VKAPI_CALL
