@@ -57,29 +57,6 @@ static const void* find_pnext(const void* pNext, VkStructureType sType) {
     return nullptr;
 }
 
-// Remove the first node with the given sType from a chain rooted at *pNext.
-// Updates *pNext if the target is the first node.
-// Returns a pointer to the removed node (so the caller can restore if needed),
-// or nullptr if not found.
-// Also sets *out_prev to the predecessor node (or nullptr if first in chain).
-static VkBaseInStructure* remove_pnext(void** pNext, VkStructureType sType,
-                                        VkBaseInStructure** out_prev) {
-    *out_prev = nullptr;
-    VkBaseInStructure** cur = reinterpret_cast<VkBaseInStructure**>(pNext);
-    while (*cur) {
-        if ((*cur)->sType == sType) {
-            VkBaseInStructure* found = *cur;
-            *cur = const_cast<VkBaseInStructure*>((*cur)->pNext);
-            return found;
-        }
-        out_prev = reinterpret_cast<VkBaseInStructure**>(
-            const_cast<VkBaseInStructure**>(&(*cur)->pNext));
-        cur = reinterpret_cast<VkBaseInStructure**>(
-            const_cast<VkBaseInStructure**>(&(*cur)->pNext));
-    }
-    return nullptr;
-}
-
 // ============================================================================
 // Chain info helpers (loader plumbing)
 // ============================================================================
